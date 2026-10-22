@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Wand2, Copy, Play, Zap, Sparkles, AlertTriangle, Table, ChevronRight } from 'lucide-react';
 import { TopBar } from '../components/TopBar';
 import { AIThinking } from '../components/UI';
@@ -16,6 +17,7 @@ const examplePrompts = [
 ];
 
 export const AIGeneratorPage: React.FC = () => {
+  const navigate = useNavigate();
   const { activeProject } = useProjectsStore();
   const { addToast } = useToastStore();
   const { provider, gemmaModel } = useAIStore();
@@ -121,6 +123,12 @@ export const AIGeneratorPage: React.FC = () => {
                     <div className="flex gap-2">
                       <button onClick={handleCopy} className="btn-ghost text-xs">
                         <Copy className="w-3.5 h-3.5" /> Copy
+                      </button>
+                      <button
+                        onClick={() => navigate('/editor', { state: { sql: result.sql } })}
+                        className="btn-primary text-xs py-1 px-2.5 flex items-center gap-1.5"
+                      >
+                        <Play className="w-3 h-3" /> Run in Editor
                       </button>
                     </div>
                   </div>

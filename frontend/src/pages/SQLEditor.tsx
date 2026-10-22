@@ -1,8 +1,9 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import Editor from '@monaco-editor/react';
 import {
   Play, AlignLeft, Sparkles, Zap, Save, Download, Clock, CheckCircle,
-  XCircle, Copy, Rows3
+  XCircle, Copy, Rows3, FileSpreadsheet, FileJson
 } from 'lucide-react';
 import { TopBar } from '../components/TopBar';
 import { AIThinking } from '../components/UI';
@@ -11,6 +12,7 @@ import { useProjectsStore, useToastStore } from '../store';
 import { QueryResult, SQLExplanationResult } from '../types';
 
 export const SQLEditorPage: React.FC = () => {
+  const location = useLocation();
   const { activeProject } = useProjectsStore();
   const { addToast } = useToastStore();
   const [sql, setSql] = useState(
@@ -21,6 +23,15 @@ export const SQLEditorPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [explaining, setExplaining] = useState(false);
   const [activeTab, setActiveTab] = useState<'results' | 'explain'>('results');
+
+  // Load passed SQL from router state (e.g., from Query History or AI Generator)
+  useEffect(() => {
+    const passedSql = (location.state as { sql?: string })?.sql;
+    if (passedSql && typeof passedSql === 'string') {
+      setSql(passedSql);
+      addToast({ type: 'info', message: 'Loaded query into editor' });
+    }
+  }, [location.state]);
 
   const handleRun = async () => {
     if (!sql.trim()) return;
@@ -83,6 +94,43 @@ export const SQLEditorPage: React.FC = () => {
     addToast({ type: 'success', message: 'SQL copied' });
   };
 
+  const handleExportCSV = () => {
+    if (!result || !result.columns.length || !result.rows.length) return;
+    const header = result.columns.map((c) => `"${c.replace(/"/g, '""')}"`).join(',');
+    const rows = result.rows.map((r) =>
+      r.map((cell) => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(',')
+    );
+    const csvContent = 'data:text/csv;charset=utf-8,' + encodeURIComponent([header, ...rows].join('\n'));
+    const link = document.createElement('a');
+    link.setAttribute('href', csvContent);
+    link.setAttribute('download', `query_result_${Date.now()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    addToast({ type: 'success', message: 'Exported results as CSV' });
+  };
+
+  const handleExportJSON = () => {
+    if (!result || !result.columns.length || !result.rows.length) return;
+    const dataObjects = result.rows.map((row) => {
+      const obj: Record<string, any> = {};
+      result.columns.forEach((col, idx) => {
+        obj[col] = row[idx];
+      });
+      return obj;
+    });
+    const blob = new Blob([JSON.stringify(dataObjects, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `query_result_${Date.now()}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    addToast({ type: 'success', message: 'Exported results as JSON' });
+  };
+
   const complexityColor = {
     simple: 'badge-green',
     moderate: 'badge-yellow',
@@ -111,7 +159,7 @@ export const SQLEditorPage: React.FC = () => {
           {activeProject && (
             <span className="badge-blue">{activeProject.db_type.toUpperCase()}</span>
           )}
-          <span className="badge-gray">Demo Mode</span>
+          <span className="badge-gray">Interactive Engine</span>
         </div>
       </div>
 
@@ -169,8 +217,27 @@ export const SQLEditorPage: React.FC = () => {
 
             {result && result.status === 'success' && (
               <div className="ml-auto flex items-center gap-3 text-xs text-dark-400">
-                <span className="flex items-center gap-1"><CheckCircle className="w-3 h-3 text-primary-400" /> {result.rowsAffected} rows</span>
-                <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> {result.executionTime}ms</span>
+                <span className="flex items-center gap-1 font-mono text-dark-300">
+                  <CheckCircle className="w-3 h-3 text-primary-400" /> {result.rowsAffected} rows
+                </span>
+                <span className="flex items-center gap-1 font-mono text-dark-300">
+                  <Clock className="w-3 h-3" /> {result.executionTime}ms
+                </span>
+                <div className="h-3 w-px bg-dark-700 mx-1" />
+                <button
+                  onClick={handleExportCSV}
+                  title="Export results to CSV"
+                  className="btn-ghost text-xs py-1 px-2 flex items-center gap-1 text-dark-300 hover:text-primary-400 transition-colors"
+                >
+                  <FileSpreadsheet className="w-3 h-3 text-primary-400" /> CSV
+                </button>
+                <button
+                  onClick={handleExportJSON}
+                  title="Export results to JSON"
+                  className="btn-ghost text-xs py-1 px-2 flex items-center gap-1 text-dark-300 hover:text-primary-400 transition-colors"
+                >
+                  <FileJson className="w-3 h-3 text-primary-400" /> JSON
+                </button>
               </div>
             )}
           </div>
