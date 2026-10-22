@@ -85,9 +85,11 @@ export const aiAPI = {
 export const queriesAPI = {
   execute: (sql: string, projectId?: string) =>
     api.post('/queries/execute', { sql, projectId }),
-  history: (params?: { search?: string; projectId?: string; limit?: number }) =>
+  history: (params?: { search?: string; projectId?: string; status?: string; limit?: number }) =>
     api.get('/queries/history', { params }),
   delete: (id: string) => api.delete(`/queries/${id}`),
+  clearHistory: (projectId?: string) =>
+    api.delete('/queries/history/clear', { params: { projectId } }),
 };
 
 // ==================== RELATIONSHIPS ====================
