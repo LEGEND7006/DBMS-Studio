@@ -139,6 +139,7 @@ router.get('/history', (req: AuthRequest, res: Response) => {
     const limit = parseInt(req.query.limit as string) || 50;
     const search = req.query.search as string || '';
     const projectId = req.query.projectId as string;
+    const status = req.query.status as string;
 
     let query = `
       SELECT q.*, p.name as project_name 
@@ -156,6 +157,10 @@ router.get('/history', (req: AuthRequest, res: Response) => {
       query += ` AND q.project_id = ?`;
       params.push(projectId);
     }
+    if (status && status !== 'all') {
+      query += ` AND q.status = ?`;
+      params.push(status);
+    }
 
     query += ` ORDER BY q.created_at DESC LIMIT ?`;
     params.push(limit);
@@ -164,6 +169,21 @@ router.get('/history', (req: AuthRequest, res: Response) => {
     res.json({ queries });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch query history' });
+  }
+});
+
+// DELETE clear query history
+router.delete('/history/clear', (req: AuthRequest, res: Response) => {
+  try {
+    const projectId = req.query.projectId as string | undefined;
+    if (projectId) {
+      db.prepare('DELETE FROM queries WHERE user_id = ? AND project_id = ?').run(req.userId, projectId);
+    } else {
+      db.prepare('DELETE FROM queries WHERE user_id = ?').run(req.userId);
+    }
+    res.json({ success: true, message: 'Query history cleared successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to clear query history' });
   }
 });
 
