@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import ReactFlow, {
   Background, Controls, MiniMap,
   Node, Edge, Connection, addEdge, useNodesState, useEdgesState,
@@ -8,7 +9,7 @@ import ReactFlow, {
 import 'reactflow/dist/style.css';
 import {
   Plus, Download, Code2, ZoomIn, Key, Hash, Type, Link2, Trash2,
-  Save, X, ChevronDown, Database, AlertCircle
+  Save, X, ChevronDown, Database, AlertCircle, Play, FileJson
 } from 'lucide-react';
 import { TopBar } from '../components/TopBar';
 import { Modal, EmptyState, LoadingSpinner } from '../components/UI';
@@ -53,8 +54,11 @@ const TableNode: React.FC<NodeProps> = ({ data, selected }) => {
 
 const nodeTypes = { tableNode: TableNode };
 
+export type SupportedDialect = 'mysql' | 'postgresql' | 'sqlite' | 'sqlserver' | 'oracle';
+
 // ==================== DATABASE DESIGNER PAGE ====================
 export const DatabaseDesignerPage: React.FC = () => {
+  const navigate = useNavigate();
   const { activeProject, setActiveProject } = useProjectsStore();
   const { addToast } = useToastStore();
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -65,6 +69,7 @@ export const DatabaseDesignerPage: React.FC = () => {
   const [selectedTable, setSelectedTable] = useState<DBTable | null>(null);
   const [showAddTable, setShowAddTable] = useState(false);
   const [showGenerateSQL, setShowGenerateSQL] = useState(false);
+  const [selectedDialect, setSelectedDialect] = useState<SupportedDialect>('mysql');
   const [generatedSQL, setGeneratedSQL] = useState('');
   const [newTableName, setNewTableName] = useState('');
   const [editingColumns, setEditingColumns] = useState<Column[]>([]);
@@ -72,6 +77,8 @@ export const DatabaseDesignerPage: React.FC = () => {
 
   useEffect(() => {
     if (activeProject) {
+      const projDialect = (activeProject.db_type?.toLowerCase() as SupportedDialect) || 'mysql';
+      setSelectedDialect(['mysql', 'postgresql', 'sqlite', 'sqlserver', 'oracle'].includes(projDialect) ? projDialect : 'mysql');
       loadSchema();
     }
   }, [activeProject?.id]);
@@ -255,49 +262,144 @@ export const DatabaseDesignerPage: React.FC = () => {
     setEditingColumns((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const generateSQL = () => {
-    const dbType = activeProject?.db_type || 'mysql';
-    let sql = '';
+  const buildSchemaDDL = (dialect: SupportedDialect): string => {
+    if (!tables.length) return '-- No tables defined in this schema';
+
+    let ddl = `-- ========================================================\n`;
+    ddl += `-- Dialect: ${dialect.toUpperCase()} DDL Schema\n`;
+    ddl += `-- Project: ${activeProject?.name || 'Untitled Project'}\n`;
+    ddl += `-- Generated at: ${new Date().toLocaleString()}\n`;
+    ddl += `-- ========================================================\n\n`;
+
     for (const table of tables) {
-      sql += `CREATE TABLE ${table.name} (\n`;
+      ddl += `CREATE TABLE ${table.name} (\n`;
       const colDefs: string[] = [];
       const pks: string[] = [];
+
       for (const col of table.columns) {
-        let def = `    ${col.name} ${col.data_type}`;
-        if (col.auto_increment && dbType === 'mysql') def += ' AUTO_INCREMENT';
-        if (!col.nullable) def += ' NOT NULL';
-        if (col.is_unique && !col.is_pk) def += ' UNIQUE';
-        if (col.default_val) def += ` DEFAULT ${col.default_val}`;
-        colDefs.push(def);
-        if (col.is_pk) pks.push(col.name);
+        let type = col.data_type || 'VARCHAR(255)';
+        let colDef = '';
+
+        if (dialect === 'postgresql') {
+          if (col.auto_increment && col.is_pk) {
+            type = type.toUpperCase().includes('BIG') ? 'BIGSERIAL' : 'SERIAL';
+            colDef = `    ${col.name} ${type}`;
+          } else {
+            colDef = `    ${col.name} ${type}`;
+          }
+        } else if (dialect === 'sqlite') {
+          if (col.auto_increment && col.is_pk) {
+            colDef = `    ${col.name} INTEGER PRIMARY KEY AUTOINCREMENT`;
+          } else {
+            colDef = `    ${col.name} ${type}`;
+          }
+        } else if (dialect === 'sqlserver') {
+          colDef = `    ${col.name} ${type}`;
+          if (col.auto_increment) colDef += ' IDENTITY(1,1)';
+        } else if (dialect === 'oracle') {
+          colDef = `    ${col.name} ${type}`;
+          if (col.auto_increment) colDef += ' GENERATED ALWAYS AS IDENTITY';
+        } else {
+          // MySQL
+          colDef = `    ${col.name} ${type}`;
+          if (col.auto_increment) colDef += ' AUTO_INCREMENT';
+        }
+
+        // Column Constraints
+        if (!col.nullable && !colDef.includes('PRIMARY KEY')) {
+          colDef += ' NOT NULL';
+        }
+        if (col.is_unique && !col.is_pk) {
+          colDef += ' UNIQUE';
+        }
+        if (col.default_val) {
+          colDef += ` DEFAULT ${col.default_val}`;
+        }
+
+        colDefs.push(colDef);
+        if (col.is_pk && dialect !== 'sqlite') {
+          pks.push(col.name);
+        }
       }
+
       if (pks.length > 0) {
         colDefs.push(`    PRIMARY KEY (${pks.join(', ')})`);
       }
-      sql += colDefs.join(',\n');
-      sql += `\n);\n\n`;
+
+      // In SQLite, Foreign Keys must be declared inline within the CREATE TABLE statement
+      if (dialect === 'sqlite') {
+        const tableRels = relationships.filter((r) => r.target_table_id === table.id);
+        for (const rel of tableRels) {
+          const sourceTable = tables.find((t) => t.id === rel.source_table_id);
+          const sourceCol = sourceTable?.columns.find((c) => c.id === rel.source_column_id);
+          const targetCol = table.columns.find((c) => c.id === rel.target_column_id);
+          if (sourceTable && sourceCol && targetCol) {
+            colDefs.push(`    FOREIGN KEY (${targetCol.name}) REFERENCES ${sourceTable.name}(${sourceCol.name}) ON DELETE ${rel.on_delete} ON UPDATE ${rel.on_update}`);
+          }
+        }
+      }
+
+      ddl += colDefs.join(',\n');
+      ddl += `\n);\n\n`;
     }
 
-    // Add FK constraints
-    for (const rel of relationships) {
-      const sourceTable = tables.find(t => t.id === rel.source_table_id);
-      const targetTable = tables.find(t => t.id === rel.target_table_id);
-      if (sourceTable && targetTable) {
-        const sourceCol = sourceTable.columns.find(c => c.id === rel.source_column_id);
-        const targetCol = targetTable.columns.find(c => c.id === rel.target_column_id);
-        if (sourceCol && targetCol) {
-          sql += `ALTER TABLE ${targetTable.name}\n  ADD CONSTRAINT fk_${targetTable.name}_${sourceTable.name}\n  FOREIGN KEY (${targetCol.name}) REFERENCES ${sourceTable.name}(${sourceCol.name})\n  ON DELETE ${rel.on_delete} ON UPDATE ${rel.on_update};\n\n`;
+    // Non-SQLite dialects support ALTER TABLE foreign keys
+    if (dialect !== 'sqlite') {
+      for (const rel of relationships) {
+        const sourceTable = tables.find((t) => t.id === rel.source_table_id);
+        const targetTable = tables.find((t) => t.id === rel.target_table_id);
+        if (sourceTable && targetTable) {
+          const sourceCol = sourceTable.columns.find((c) => c.id === rel.source_column_id);
+          const targetCol = targetTable.columns.find((c) => c.id === rel.target_column_id);
+          if (sourceCol && targetCol) {
+            ddl += `ALTER TABLE ${targetTable.name}\n`;
+            ddl += `  ADD CONSTRAINT fk_${targetTable.name}_${sourceTable.name}\n`;
+            ddl += `  FOREIGN KEY (${targetCol.name}) REFERENCES ${sourceTable.name}(${sourceCol.name})\n`;
+            ddl += `  ON DELETE ${rel.on_delete} ON UPDATE ${rel.on_update};\n\n`;
+          }
         }
       }
     }
 
-    setGeneratedSQL(sql || '-- No tables to generate SQL from');
+    return ddl;
+  };
+
+  const handleOpenGenerateSQL = (dialect?: SupportedDialect) => {
+    const d = dialect || selectedDialect;
+    setSelectedDialect(d);
+    setGeneratedSQL(buildSchemaDDL(d));
     setShowGenerateSQL(true);
+  };
+
+  const handleDialectChange = (dialect: SupportedDialect) => {
+    setSelectedDialect(dialect);
+    setGeneratedSQL(buildSchemaDDL(dialect));
+  };
+
+  const handleExportJSON = () => {
+    if (!activeProject) return;
+    const exportData = {
+      project: activeProject,
+      tables,
+      relationships,
+      exported_at: new Date().toISOString(),
+      generator: 'Intelligent DBMS Studio',
+    };
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${activeProject.name.toLowerCase().replace(/[^a-z0-9_-]/g, '_')}_schema.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    addToast({ type: 'success', message: 'Full database schema exported as JSON' });
   };
 
   const copySQL = () => {
     navigator.clipboard.writeText(generatedSQL);
-    addToast({ type: 'success', message: 'SQL copied to clipboard' });
+    addToast({ type: 'success', message: `${selectedDialect.toUpperCase()} DDL copied to clipboard` });
   };
 
   // If no project selected, show picker
@@ -334,12 +436,19 @@ export const DatabaseDesignerPage: React.FC = () => {
         title="Database Designer"
         subtitle={`${tables.length} tables · ${relationships.length} relationships`}
         actions={
-          <div className="flex gap-2">
-            <button onClick={() => setShowAddTable(true)} className="btn-primary text-sm">
-              <Plus className="w-4 h-4" /> Add Table
+          <div className="flex items-center gap-2">
+            <button onClick={() => setShowAddTable(true)} className="btn-primary text-xs py-1.5 px-3">
+              <Plus className="w-3.5 h-3.5" /> Add Table
             </button>
-            <button onClick={generateSQL} className="btn-secondary text-sm">
-              <Code2 className="w-4 h-4" /> Generate SQL
+            <button onClick={() => handleOpenGenerateSQL()} className="btn-secondary text-xs py-1.5 px-3">
+              <Code2 className="w-3.5 h-3.5" /> Generate SQL
+            </button>
+            <button
+              onClick={handleExportJSON}
+              className="btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5 text-dark-300 hover:text-dark-100"
+              title="Download entire schema as JSON"
+            >
+              <FileJson className="w-3.5 h-3.5 text-primary-400" /> Export JSON
             </button>
           </div>
         }
@@ -492,26 +601,65 @@ export const DatabaseDesignerPage: React.FC = () => {
       </Modal>
 
       {/* Generate SQL Modal */}
-      <Modal open={showGenerateSQL} onClose={() => setShowGenerateSQL(false)} title="Generated SQL" maxWidth="max-w-3xl">
-        <div>
-          <pre className="code-block max-h-96 overflow-y-auto text-xs">{generatedSQL}</pre>
-          <div className="flex gap-3 mt-4">
-            <button onClick={copySQL} className="btn-primary text-sm">
-              <Code2 className="w-4 h-4" /> Copy SQL
-            </button>
+      <Modal open={showGenerateSQL} onClose={() => setShowGenerateSQL(false)} title="Generate DDL Schema" maxWidth="max-w-3xl">
+        <div className="space-y-4">
+          {/* Dialect Selector */}
+          <div>
+            <label className="text-xs font-semibold text-dark-400 uppercase tracking-wider block mb-2">Target SQL Dialect</label>
+            <div className="flex flex-wrap gap-2">
+              {(['mysql', 'postgresql', 'sqlite', 'sqlserver', 'oracle'] as SupportedDialect[]).map((d) => (
+                <button
+                  key={d}
+                  onClick={() => handleDialectChange(d)}
+                  className={clsx(
+                    'px-3 py-1.5 rounded-lg text-xs font-medium uppercase tracking-wider transition-all',
+                    selectedDialect === d
+                      ? 'bg-primary-600 text-white shadow-md shadow-primary-500/20'
+                      : 'bg-dark-800 text-dark-400 hover:text-dark-200 border border-dark-700'
+                  )}
+                >
+                  {d}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <pre className="code-block max-h-96 overflow-y-auto text-xs font-mono">{generatedSQL}</pre>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-dark-700">
+            <div className="flex gap-2">
+              <button onClick={copySQL} className="btn-secondary text-xs py-1.5 px-3">
+                <Code2 className="w-3.5 h-3.5" /> Copy SQL
+              </button>
+              <button
+                onClick={() => {
+                  const blob = new Blob([generatedSQL], { type: 'text/sql' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `${activeProject?.name ? activeProject.name.toLowerCase().replace(/[^a-z0-9_-]/g, '_') : 'schema'}_${selectedDialect}.sql`;
+                  document.body.appendChild(a);
+                  a.click();
+                  document.body.removeChild(a);
+                  URL.revokeObjectURL(url);
+                  addToast({ type: 'success', message: `Exported as ${selectedDialect.toUpperCase()} .sql file` });
+                }}
+                className="btn-secondary text-xs py-1.5 px-3"
+              >
+                <Download className="w-3.5 h-3.5" /> Download .sql
+              </button>
+            </div>
+
             <button
               onClick={() => {
-                const blob = new Blob([generatedSQL], { type: 'text/sql' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `${activeProject?.name || 'schema'}.sql`;
-                a.click();
-                URL.revokeObjectURL(url);
+                setShowGenerateSQL(false);
+                navigate('/editor', { state: { sql: generatedSQL } });
               }}
-              className="btn-secondary text-sm"
+              className="btn-primary text-xs py-1.5 px-3.5 flex items-center gap-1.5 shadow-md shadow-primary-500/20"
             >
-              <Download className="w-4 h-4" /> Download
+              <Play className="w-3.5 h-3.5" /> Run in SQL Editor
             </button>
           </div>
         </div>
