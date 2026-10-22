@@ -69,10 +69,11 @@ export interface Query {
   project_id: string | null;
   user_id: string;
   sql_text: string;
-  status: 'success' | 'error';
+  status: 'success' | 'failed' | 'error';
   rows_returned: number;
   exec_time_ms: number;
   source: 'manual' | 'ai_generated' | 'sql_editor';
+  error_message?: string | null;
   created_at: string;
   project_name?: string;
 }

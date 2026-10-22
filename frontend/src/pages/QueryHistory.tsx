@@ -144,7 +144,8 @@ export const QueryHistoryPage: React.FC = () => {
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th className="w-1/2">SQL Statement</th>
+                    <th className="w-5/12">SQL Statement</th>
+                    <th>Status</th>
                     <th>Source</th>
                     <th>Rows</th>
                     <th>Exec Time</th>
@@ -156,16 +157,36 @@ export const QueryHistoryPage: React.FC = () => {
                   {filteredQueries.map((q) => (
                     <tr key={q.id} className="group hover:bg-dark-800/40">
                       <td className="font-mono text-xs">
-                        <div className="flex items-start gap-2">
+                        <div className="flex flex-col gap-1">
                           <span className="text-dark-200 max-h-16 overflow-hidden text-ellipsis line-clamp-2 block select-all">
                             {q.sql_text}
                           </span>
+                          {q.error_message && (
+                            <span className="text-[11px] text-red-400 font-sans flex items-center gap-1">
+                              <AlertCircle className="w-3 h-3 flex-shrink-0 text-red-400" />
+                              {q.error_message}
+                            </span>
+                          )}
                         </div>
+                      </td>
+                      <td>
+                        {q.status === 'failed' || q.status === 'error' ? (
+                          <span
+                            className="badge-red text-[11px] inline-flex items-center gap-1"
+                            title={q.error_message || 'Execution error'}
+                          >
+                            <AlertCircle className="w-3 h-3 text-red-400" /> Failed
+                          </span>
+                        ) : (
+                          <span className="badge-green text-[11px] inline-flex items-center gap-1">
+                            <CheckCircle className="w-3 h-3 text-primary-400" /> Success
+                          </span>
+                        )}
                       </td>
                       <td>{getSourceBadge(q.source)}</td>
                       <td>
                         <span className="text-xs font-mono text-dark-300">
-                          {q.rows_returned !== undefined ? `${q.rows_returned} rows` : '-'}
+                          {q.status === 'failed' || q.status === 'error' ? '-' : `${q.rows_returned ?? 0} rows`}
                         </span>
                       </td>
                       <td>

@@ -97,6 +97,7 @@ export function initializeDatabase(): void {
       user_id TEXT NOT NULL,
       sql_text TEXT NOT NULL,
       status TEXT DEFAULT 'success',
+      error_message TEXT,
       rows_returned INTEGER DEFAULT 0,
       exec_time_ms REAL DEFAULT 0,
       source TEXT DEFAULT 'manual',
@@ -141,6 +142,13 @@ export function initializeDatabase(): void {
       updated_at TEXT DEFAULT (datetime('now'))
     );
   `);
+
+  // Run migrations for existing databases
+  try {
+    db.exec('ALTER TABLE queries ADD COLUMN error_message TEXT');
+  } catch {
+    // Column already exists
+  }
 
   console.log('✅ Database initialized successfully');
 }

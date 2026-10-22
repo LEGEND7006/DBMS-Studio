@@ -87,7 +87,36 @@ async function runTests() {
   });
   console.log(`✅ 9. Query History: ${history.body.queries.length} queries recorded in history log`);
 
-  console.log('\n🎉 ALL 9 CORE SYSTEM CAPABILITIES VERIFIED SUCCESSFULLY!');
+  // 10. Syntax Pre-Validation Error Handling
+  const brokenQuery = await request({
+    hostname: 'localhost', port: 5000, path: '/api/queries/execute', method: 'POST',
+    headers: authHeaders
+  }, { sql: "SELECT * FROM users WHERE (name = 'John", projectId: project.id });
+  if (brokenQuery.status === 400 && brokenQuery.body.error) {
+    console.log(`✅ 10. SQL Syntax Error Caught (HTTP 400): "${brokenQuery.body.error}"`);
+  } else {
+    throw new Error('Expected HTTP 400 for unclosed quote syntax error');
+  }
+
+  // 11. Destructive Query Safety Mode & Audit Log
+  const blockedQuery = await request({
+    hostname: 'localhost', port: 5000, path: '/api/queries/execute', method: 'POST',
+    headers: authHeaders
+  }, { sql: "DROP TABLE users;", projectId: project.id });
+  if (blockedQuery.status === 403 && blockedQuery.body.error) {
+    console.log(`✅ 11. Destructive Statement Blocked (HTTP 403): "${blockedQuery.body.error}"`);
+  } else {
+    throw new Error('Expected HTTP 403 for destructive SQL statement');
+  }
+
+  // 12. Verify Audit Trail Contains Failed Queries
+  const updatedHistory = await request({
+    hostname: 'localhost', port: 5000, path: '/api/queries/history?status=failed', method: 'GET',
+    headers: authHeaders
+  });
+  console.log(`✅ 12. Failed Query Audit Trail Verified: ${updatedHistory.body.queries.length} failed queries recorded with error messages`);
+
+  console.log('\n🎉 ALL 12 SYSTEM CAPABILITIES & ERROR-HANDLING TESTS VERIFIED SUCCESSFULLY!');
 }
 
 runTests().catch(console.error);

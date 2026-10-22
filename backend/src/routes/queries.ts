@@ -6,32 +6,170 @@ import { authMiddleware, AuthRequest } from '../middleware/auth';
 const router = Router();
 router.use(authMiddleware);
 
-// POST execute a query (demo mode — simulates execution against sample data)
-router.post('/execute', (req: AuthRequest, res: Response) => {
-  try {
-    const { sql, projectId } = req.body;
-    if (!sql) return res.status(400).json({ error: 'SQL query is required' });
+export interface SyntaxValidationResult {
+  valid: boolean;
+  error?: string;
+}
 
-    // Security check — block destructive queries in demo
-    const upperSql = sql.trim().toUpperCase();
-    const destructive = ['DROP DATABASE', 'DROP TABLE', 'TRUNCATE DATABASE', 'DELETE FROM users WHERE 1', 'DELETE FROM projects'];
-    for (const pattern of destructive) {
-      if (upperSql.includes(pattern)) {
-        return res.status(403).json({ error: 'Destructive queries are not allowed in demo mode' });
+/**
+ * Pre-execution SQL syntax validator
+ * Detects common syntax errors including unbalanced quotes, unbalanced parentheses,
+ * empty SELECT clauses, and invalid keyword ordering.
+ */
+export function validateSqlSyntax(rawSql: string): SyntaxValidationResult {
+  const sql = rawSql.trim();
+  if (!sql) {
+    return { valid: false, error: 'Empty SQL query provided' };
+  }
+
+  // 1. Unbalanced quotes & parentheses checking
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  let parenDepth = 0;
+
+  for (let i = 0; i < sql.length; i++) {
+    const ch = sql[i];
+    const prev = i > 0 ? sql[i - 1] : '';
+
+    if (ch === "'" && !inDoubleQuote && prev !== '\\') {
+      inSingleQuote = !inSingleQuote;
+    } else if (ch === '"' && !inSingleQuote && prev !== '\\') {
+      inDoubleQuote = !inDoubleQuote;
+    } else if (!inSingleQuote && !inDoubleQuote) {
+      if (ch === '(') {
+        parenDepth++;
+      } else if (ch === ')') {
+        parenDepth--;
+        if (parenDepth < 0) {
+          return { valid: false, error: `Syntax error: unexpected closing parenthesis ')' at position ${i + 1}` };
+        }
       }
     }
+  }
 
-    // Simulate execution with realistic demo data
-    const startTime = Date.now();
-    const result = simulateQuery(sql);
-    const execTime = (Date.now() - startTime) + Math.random() * 50;
+  if (inSingleQuote) {
+    return { valid: false, error: 'Syntax error: unclosed single quotation mark in query literal' };
+  }
+  if (inDoubleQuote) {
+    return { valid: false, error: 'Syntax error: unclosed double quotation mark in identifier' };
+  }
+  if (parenDepth > 0) {
+    return { valid: false, error: `Syntax error: ${parenDepth} unclosed parenthesis '(' detected` };
+  }
 
-    // Save to history
-    const queryId = uuidv4();
+  // 2. Structural & keyword checks
+  const cleanSql = sql
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/--.*$/gm, ' ')
+    .trim();
+
+  const upper = cleanSql.toUpperCase();
+  const firstWord = upper.split(/\s+/)[0];
+
+  const validVerbs = [
+    'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'ALTER', 'DROP',
+    'SHOW', 'DESCRIBE', 'EXPLAIN', 'WITH', 'USE', 'PRAGMA', 'BEGIN', 'COMMIT', 'ROLLBACK'
+  ];
+
+  if (!validVerbs.includes(firstWord)) {
+    return {
+      valid: false,
+      error: `Syntax error: Unrecognized statement verb '${firstWord}'. Query must start with a valid SQL keyword.`
+    };
+  }
+
+  if (firstWord === 'SELECT') {
+    if (/^SELECT\s+FROM\b/i.test(cleanSql)) {
+      return { valid: false, error: "Syntax error: Missing column expressions or '*' between SELECT and FROM" };
+    }
+    if (/^SELECT\s+WHERE\b/i.test(cleanSql)) {
+      return { valid: false, error: "Syntax error: SELECT query cannot specify a WHERE clause without a FROM table clause" };
+    }
+    if (/,\s*FROM\b/i.test(cleanSql)) {
+      return { valid: false, error: "Syntax error: Trailing comma in column projection list before 'FROM'" };
+    }
+    if (/,\s*WHERE\b/i.test(cleanSql)) {
+      return { valid: false, error: "Syntax error: Trailing comma before 'WHERE' clause" };
+    }
+  }
+
+  return { valid: true };
+}
+
+// POST execute a query (with full syntax validation and audit trail)
+router.post('/execute', (req: AuthRequest, res: Response) => {
+  const startTime = Date.now();
+  const { sql, projectId } = req.body;
+
+  if (!sql || typeof sql !== 'string' || !sql.trim()) {
+    return res.status(400).json({ error: 'SQL query is required' });
+  }
+
+  const queryId = uuidv4();
+  const trimmedSql = sql.trim();
+  const upperSql = trimmedSql.toUpperCase();
+
+  // 1. Security check — block destructive commands in safety mode
+  const destructivePatterns = [
+    'DROP DATABASE', 'DROP TABLE', 'TRUNCATE DATABASE', 'TRUNCATE TABLE',
+    'DELETE FROM USERS WHERE 1', 'DELETE FROM PROJECTS'
+  ];
+
+  for (const pattern of destructivePatterns) {
+    if (upperSql.includes(pattern)) {
+      const execTime = Date.now() - startTime;
+      const errorMsg = `Destructive query blocked: '${pattern}' is not permitted in safety mode`;
+
+      try {
+        db.prepare(`
+          INSERT INTO queries (id, project_id, user_id, sql_text, status, error_message, rows_returned, exec_time_ms, source)
+          VALUES (?, ?, ?, ?, 'failed', ?, 0, ?, 'sql_editor')
+        `).run(queryId, projectId || null, req.userId, trimmedSql, errorMsg, parseFloat(execTime.toFixed(2)));
+      } catch (err) {
+        console.error('Failed to record blocked query in history:', err);
+      }
+
+      return res.status(403).json({
+        queryId,
+        error: errorMsg,
+        status: 'error',
+        executionTime: parseFloat(execTime.toFixed(2))
+      });
+    }
+  }
+
+  // 2. Syntax validation
+  const validation = validateSqlSyntax(trimmedSql);
+  if (!validation.valid) {
+    const execTime = (Date.now() - startTime) + Math.random() * 8;
+    const errorMsg = validation.error || 'SQL syntax error';
+
+    try {
+      db.prepare(`
+        INSERT INTO queries (id, project_id, user_id, sql_text, status, error_message, rows_returned, exec_time_ms, source)
+        VALUES (?, ?, ?, ?, 'failed', ?, 0, ?, 'sql_editor')
+      `).run(queryId, projectId || null, req.userId, trimmedSql, errorMsg, parseFloat(execTime.toFixed(2)));
+    } catch (err) {
+      console.error('Failed to record syntax error query in history:', err);
+    }
+
+    return res.status(400).json({
+      queryId,
+      error: errorMsg,
+      status: 'error',
+      executionTime: parseFloat(execTime.toFixed(2))
+    });
+  }
+
+  // 3. Execution Simulation
+  try {
+    const result = simulateQuery(trimmedSql);
+    const execTime = (Date.now() - startTime) + Math.random() * 40;
+
     db.prepare(`
-      INSERT INTO queries (id, project_id, user_id, sql_text, status, rows_returned, exec_time_ms, source)
-      VALUES (?, ?, ?, ?, 'success', ?, ?, 'sql_editor')
-    `).run(queryId, projectId || null, req.userId, sql, result.rows.length, execTime.toFixed(2));
+      INSERT INTO queries (id, project_id, user_id, sql_text, status, error_message, rows_returned, exec_time_ms, source)
+      VALUES (?, ?, ?, ?, 'success', NULL, ?, ?, 'sql_editor')
+    `).run(queryId, projectId || null, req.userId, trimmedSql, result.rows.length, parseFloat(execTime.toFixed(2)));
 
     res.json({
       queryId,
@@ -41,8 +179,25 @@ router.post('/execute', (req: AuthRequest, res: Response) => {
       executionTime: parseFloat(execTime.toFixed(2)),
       status: 'success'
     });
-  } catch (error) {
-    res.status(500).json({ error: 'Query execution failed' });
+  } catch (err: any) {
+    const execTime = Date.now() - startTime;
+    const errorMsg = err?.message || 'Query execution failed';
+
+    try {
+      db.prepare(`
+        INSERT INTO queries (id, project_id, user_id, sql_text, status, error_message, rows_returned, exec_time_ms, source)
+        VALUES (?, ?, ?, ?, 'failed', ?, 0, ?, 'sql_editor')
+      `).run(queryId, projectId || null, req.userId, trimmedSql, errorMsg, parseFloat(execTime.toFixed(2)));
+    } catch (e) {
+      console.error('Failed to record failed query in history:', e);
+    }
+
+    res.status(500).json({
+      queryId,
+      error: errorMsg,
+      status: 'error',
+      executionTime: parseFloat(execTime.toFixed(2))
+    });
   }
 });
 
@@ -139,6 +294,7 @@ router.get('/history', (req: AuthRequest, res: Response) => {
     const limit = parseInt(req.query.limit as string) || 50;
     const search = req.query.search as string || '';
     const projectId = req.query.projectId as string;
+    const status = req.query.status as string;
 
     let query = `
       SELECT q.*, p.name as project_name 
@@ -155,6 +311,10 @@ router.get('/history', (req: AuthRequest, res: Response) => {
     if (projectId) {
       query += ` AND q.project_id = ?`;
       params.push(projectId);
+    }
+    if (status && status !== 'all') {
+      query += ` AND q.status = ?`;
+      params.push(status);
     }
 
     query += ` ORDER BY q.created_at DESC LIMIT ?`;
