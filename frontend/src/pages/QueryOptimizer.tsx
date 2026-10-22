@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Zap, ArrowRight, AlertCircle, AlertTriangle, Info, TrendingUp, Copy } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Zap, ArrowRight, AlertCircle, AlertTriangle, Info, TrendingUp, Copy, Play } from 'lucide-react';
 import { TopBar } from '../components/TopBar';
 import { AIThinking, ScoreGauge, SeverityBadge } from '../components/UI';
 import { aiAPI } from '../services/api';
@@ -8,6 +9,7 @@ import { SQLOptimizationResult } from '../types';
 import { clsx } from 'clsx';
 
 export const QueryOptimizerPage: React.FC = () => {
+  const navigate = useNavigate();
   const { activeProject } = useProjectsStore();
   const { addToast } = useToastStore();
   const { provider, gemmaModel } = useAIStore();
@@ -144,9 +146,17 @@ export const QueryOptimizerPage: React.FC = () => {
               <div className="card p-4 border-primary-800/30">
                 <div className="flex items-center justify-between mb-3">
                   <h4 className="text-sm font-semibold text-primary-400">✨ Optimized Query</h4>
-                  <button onClick={() => handleCopy(result.optimizedSql)} className="btn-ghost text-xs">
-                    <Copy className="w-3 h-3" />
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button onClick={() => handleCopy(result.optimizedSql)} className="btn-ghost text-xs">
+                      <Copy className="w-3 h-3" /> Copy
+                    </button>
+                    <button
+                      onClick={() => navigate('/editor', { state: { sql: result.optimizedSql } })}
+                      className="btn-primary text-xs py-1 px-2.5 flex items-center gap-1.5"
+                    >
+                      <Play className="w-3 h-3" /> Run in Editor
+                    </button>
+                  </div>
                 </div>
                 <pre className="code-block text-xs max-h-64 overflow-y-auto">{result.optimizedSql}</pre>
               </div>
