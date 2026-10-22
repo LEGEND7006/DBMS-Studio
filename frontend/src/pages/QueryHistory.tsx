@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  History, Search, Trash2, Copy, Play, Zap, Clock, CheckCircle,
-  AlertCircle, Database, Filter, ArrowUpRight
+  History, Search, Trash2, Copy, Play, Clock, CheckCircle2,
+  XCircle, Filter, ArrowUpRight, Download, Activity, FileSpreadsheet,
+  AlertTriangle, RefreshCw, AlertCircle
 } from 'lucide-react';
 import { TopBar } from '../components/TopBar';
 import { EmptyState, LoadingSpinner } from '../components/UI';
@@ -19,6 +20,9 @@ export const QueryHistoryPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [sourceFilter, setSourceFilter] = useState<'all' | 'sql_editor' | 'ai_generated' | 'manual'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'success' | 'failed'>('all');
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [clearing, setClearing] = useState(false);
 
   useEffect(() => {
     loadHistory();
@@ -32,7 +36,7 @@ export const QueryHistoryPage: React.FC = () => {
         search: searchTerm,
       });
       setQueries(res.data.queries || []);
-    } catch (err) {
+    } catch {
       addToast({ type: 'error', message: 'Failed to load query history' });
     } finally {
       setLoading(false);
@@ -59,18 +63,81 @@ export const QueryHistoryPage: React.FC = () => {
     }
   };
 
+  const handleClearHistory = async () => {
+    setClearing(true);
+    try {
+      await queriesAPI.clearHistory(activeProject?.id);
+      setQueries([]);
+      setShowClearConfirm(false);
+      addToast({ type: 'success', message: 'Query history cleared successfully' });
+    } catch {
+      addToast({ type: 'error', message: 'Failed to clear query history' });
+    } finally {
+      setClearing(false);
+    }
+  };
+
+  const handleExportCSV = () => {
+    if (filteredQueries.length === 0) {
+      addToast({ type: 'info', message: 'No queries to export' });
+      return;
+    }
+
+    const headers = ['ID', 'SQL Statement', 'Status', 'Source', 'Rows Returned', 'Exec Time (ms)', 'Timestamp'];
+    const csvRows = [headers.join(',')];
+
+    for (const q of filteredQueries) {
+      const escapedSql = `"${(q.sql_text || '').replace(/"/g, '""').replace(/\n/g, ' ')}"`;
+      const row = [
+        q.id,
+        escapedSql,
+        q.status || 'success',
+        q.source || 'manual',
+        q.rows_returned ?? 0,
+        q.exec_time_ms ?? 0,
+        `"${q.created_at}"`
+      ];
+      csvRows.push(row.join(','));
+    }
+
+    const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `query_history_${activeProject ? activeProject.name.toLowerCase().replace(/\s+/g, '_') : 'all'}_${Date.now()}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+    addToast({ type: 'success', message: 'Query history exported to CSV' });
+  };
+
   const handleOpenInEditor = (sql: string) => {
-    // Navigate to editor with query in state
     navigate('/editor', { state: { sql } });
   };
 
-  const filteredQueries = queries.filter((q) => {
-    if (sourceFilter !== 'all' && q.source !== sourceFilter) return false;
-    if (searchTerm) {
-      return q.sql_text.toLowerCase().includes(searchTerm.toLowerCase());
-    }
-    return true;
-  });
+  const filteredQueries = useMemo(() => {
+    return queries.filter((q) => {
+      if (sourceFilter !== 'all' && q.source !== sourceFilter) return false;
+      if (statusFilter !== 'all' && (q.status || 'success') !== statusFilter) return false;
+      if (searchTerm) {
+        return q.sql_text.toLowerCase().includes(searchTerm.toLowerCase());
+      }
+      return true;
+    });
+  }, [queries, sourceFilter, statusFilter, searchTerm]);
+
+  // Statistics calculation
+  const stats = useMemo(() => {
+    const total = filteredQueries.length;
+    if (total === 0) return { total: 0, successCount: 0, successRate: 100, avgTimeMs: 0 };
+    const successCount = filteredQueries.filter((q) => (q.status || 'success') === 'success').length;
+    const totalTime = filteredQueries.reduce((acc, q) => acc + (q.exec_time_ms || 0), 0);
+    return {
+      total,
+      successCount,
+      successRate: Math.round((successCount / total) * 100),
+      avgTimeMs: (totalTime / total).toFixed(1),
+    };
+  }, [filteredQueries]);
 
   const getSourceBadge = (source: string) => {
     switch (source) {
@@ -83,6 +150,21 @@ export const QueryHistoryPage: React.FC = () => {
     }
   };
 
+  const getStatusBadge = (status?: string) => {
+    if (status === 'failed') {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-950/60 text-red-400 border border-red-800/50">
+          <XCircle className="w-3 h-3 text-red-400" /> Failed
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-950/60 text-emerald-400 border border-emerald-800/50">
+        <CheckCircle2 className="w-3 h-3 text-emerald-400" /> Success
+      </span>
+    );
+  };
+
   return (
     <div className="flex-1 overflow-y-auto">
       <TopBar
@@ -91,38 +173,150 @@ export const QueryHistoryPage: React.FC = () => {
       />
 
       <div className="p-6 max-w-7xl mx-auto space-y-6">
-        {/* Filters and Search */}
-        <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
-          <form onSubmit={handleSearch} className="relative w-full md:w-96">
+        {/* Quick Stats Overview */}
+        {queries.length > 0 && (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="card p-4 flex items-center justify-between">
+              <div>
+                <p className="text-xs text-dark-400 font-medium">Total Queries</p>
+                <p className="text-2xl font-bold text-dark-100 mt-1">{stats.total}</p>
+              </div>
+              <div className="w-10 h-10 rounded-xl bg-primary-950/80 border border-primary-800/40 flex items-center justify-center text-primary-400">
+                <History className="w-5 h-5" />
+              </div>
+            </div>
+
+            <div className="card p-4 flex items-center justify-between">
+              <div>
+                <p className="text-xs text-dark-400 font-medium">Success Rate</p>
+                <p className="text-2xl font-bold text-emerald-400 mt-1">{stats.successRate}%</p>
+              </div>
+              <div className="w-10 h-10 rounded-xl bg-emerald-950/80 border border-emerald-800/40 flex items-center justify-center text-emerald-400">
+                <CheckCircle2 className="w-5 h-5" />
+              </div>
+            </div>
+
+            <div className="card p-4 flex items-center justify-between">
+              <div>
+                <p className="text-xs text-dark-400 font-medium">Avg Execution Time</p>
+                <p className="text-2xl font-bold text-cyan-400 mt-1">{stats.avgTimeMs} ms</p>
+              </div>
+              <div className="w-10 h-10 rounded-xl bg-cyan-950/80 border border-cyan-800/40 flex items-center justify-center text-cyan-400">
+                <Activity className="w-5 h-5" />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Filters and Action Bar */}
+        <div className="flex flex-col lg:flex-row gap-4 items-start lg:items-center justify-between">
+          <form onSubmit={handleSearch} className="relative w-full lg:w-80">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-dark-500" />
             <input
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               placeholder="Search in query history..."
-              className="input pl-10 text-sm"
+              className="input pl-10 text-sm w-full"
             />
           </form>
 
-          <div className="flex items-center gap-2 w-full md:w-auto">
-            <Filter className="w-4 h-4 text-dark-400" />
-            <span className="text-xs text-dark-400 font-medium mr-1">Source:</span>
-            {(['all', 'sql_editor', 'ai_generated', 'manual'] as const).map((s) => (
+          <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
+            {/* Source Filter */}
+            <div className="flex items-center gap-1.5 bg-dark-900/60 p-1 rounded-lg border border-dark-800">
+              <span className="text-xs text-dark-400 font-medium px-2">Source:</span>
+              {(['all', 'sql_editor', 'ai_generated', 'manual'] as const).map((s) => (
+                <button
+                  key={s}
+                  onClick={() => setSourceFilter(s)}
+                  className={clsx(
+                    'px-2.5 py-1 rounded-md text-xs font-medium capitalize transition-colors',
+                    sourceFilter === s
+                      ? 'bg-primary-900/50 text-primary-300 border border-primary-700/60 shadow-sm'
+                      : 'text-dark-400 hover:text-dark-200'
+                  )}
+                >
+                  {s.replace('_', ' ')}
+                </button>
+              ))}
+            </div>
+
+            {/* Status Filter */}
+            <div className="flex items-center gap-1.5 bg-dark-900/60 p-1 rounded-lg border border-dark-800">
+              <span className="text-xs text-dark-400 font-medium px-2">Status:</span>
+              {(['all', 'success', 'failed'] as const).map((st) => (
+                <button
+                  key={st}
+                  onClick={() => setStatusFilter(st)}
+                  className={clsx(
+                    'px-2.5 py-1 rounded-md text-xs font-medium capitalize transition-colors',
+                    statusFilter === st
+                      ? 'bg-primary-900/50 text-primary-300 border border-primary-700/60 shadow-sm'
+                      : 'text-dark-400 hover:text-dark-200'
+                  )}
+                >
+                  {st}
+                </button>
+              ))}
+            </div>
+
+            {/* Actions: Export & Clear */}
+            <div className="flex items-center gap-2 ml-auto">
               <button
-                key={s}
-                onClick={() => setSourceFilter(s)}
-                className={clsx(
-                  'px-3 py-1.5 rounded-lg text-xs font-medium capitalize transition-colors',
-                  sourceFilter === s
-                    ? 'bg-primary-900/40 text-primary-400 border border-primary-800/50'
-                    : 'bg-dark-800 text-dark-400 hover:text-dark-200 border border-dark-700'
-                )}
+                onClick={handleExportCSV}
+                title="Export queries to CSV"
+                disabled={filteredQueries.length === 0}
+                className="btn-secondary text-xs flex items-center gap-1.5 py-1.5 px-3 disabled:opacity-50"
               >
-                {s.replace('_', ' ')}
+                <Download className="w-3.5 h-3.5" />
+                Export CSV
               </button>
-            ))}
+
+              <button
+                onClick={() => setShowClearConfirm(true)}
+                title="Clear all history"
+                disabled={queries.length === 0}
+                className="btn-danger text-xs flex items-center gap-1.5 py-1.5 px-3 disabled:opacity-50"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Clear History
+              </button>
+            </div>
           </div>
         </div>
+
+        {/* Clear Confirmation Modal / Banner */}
+        {showClearConfirm && (
+          <div className="card p-4 border-red-900/50 bg-red-950/20 flex flex-col sm:flex-row items-center justify-between gap-4 animate-in fade-in">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-full bg-red-900/40 border border-red-700/50 flex items-center justify-center text-red-400 shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-dark-100">Clear Query History?</p>
+                <p className="text-xs text-dark-400 mt-0.5">
+                  This will permanently delete all {activeProject ? `queries for "${activeProject.name}"` : 'logged query executions'}. This action cannot be undone.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => setShowClearConfirm(false)}
+                className="btn-secondary text-xs py-1.5 px-3"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleClearHistory}
+                disabled={clearing}
+                className="btn-danger text-xs py-1.5 px-3 flex items-center gap-1.5"
+              >
+                {clearing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                Confirm Delete
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Query Table */}
         {loading ? (
@@ -130,7 +324,7 @@ export const QueryHistoryPage: React.FC = () => {
         ) : filteredQueries.length === 0 ? (
           <EmptyState
             icon={History}
-            title={searchTerm ? 'No matching queries found' : 'No query history yet'}
+            title={searchTerm || sourceFilter !== 'all' || statusFilter !== 'all' ? 'No matching queries found' : 'No query history yet'}
             description="Run queries in the SQL Editor or AI Generator to populate your execution history."
             action={
               <button onClick={() => navigate('/editor')} className="btn-primary">
@@ -169,20 +363,7 @@ export const QueryHistoryPage: React.FC = () => {
                           )}
                         </div>
                       </td>
-                      <td>
-                        {q.status === 'failed' || q.status === 'error' ? (
-                          <span
-                            className="badge-red text-[11px] inline-flex items-center gap-1"
-                            title={q.error_message || 'Execution error'}
-                          >
-                            <AlertCircle className="w-3 h-3 text-red-400" /> Failed
-                          </span>
-                        ) : (
-                          <span className="badge-green text-[11px] inline-flex items-center gap-1">
-                            <CheckCircle className="w-3 h-3 text-primary-400" /> Success
-                          </span>
-                        )}
-                      </td>
+                      <td>{getStatusBadge(q.status)}</td>
                       <td>{getSourceBadge(q.source)}</td>
                       <td>
                         <span className="text-xs font-mono text-dark-300">

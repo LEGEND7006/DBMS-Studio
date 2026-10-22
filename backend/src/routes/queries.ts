@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db/database';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { verifyProjectOwnership } from '../middleware/ownership';
 
 const router = Router();
 router.use(authMiddleware);
@@ -103,6 +104,10 @@ router.post('/execute', (req: AuthRequest, res: Response) => {
 
   if (!sql || typeof sql !== 'string' || !sql.trim()) {
     return res.status(400).json({ error: 'SQL query is required' });
+  }
+
+  if (projectId && !verifyProjectOwnership(projectId, req.userId!)) {
+    return res.status(403).json({ error: 'Access denied: You do not have permission to execute queries in this project' });
   }
 
   const queryId = uuidv4();
@@ -324,6 +329,21 @@ router.get('/history', (req: AuthRequest, res: Response) => {
     res.json({ queries });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch query history' });
+  }
+});
+
+// DELETE clear query history
+router.delete('/history/clear', (req: AuthRequest, res: Response) => {
+  try {
+    const projectId = req.query.projectId as string | undefined;
+    if (projectId) {
+      db.prepare('DELETE FROM queries WHERE user_id = ? AND project_id = ?').run(req.userId, projectId);
+    } else {
+      db.prepare('DELETE FROM queries WHERE user_id = ?').run(req.userId);
+    }
+    res.json({ success: true, message: 'Query history cleared successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to clear query history' });
   }
 });
 

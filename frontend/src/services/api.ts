@@ -79,15 +79,19 @@ export const aiAPI = {
     api.post('/ai/analyze-schema', { projectId }),
   suggestIndexes: (projectId: string) =>
     api.post('/ai/suggest-indexes', { projectId }),
+  applyAutofix: (data: { projectId: string; issue: any }) =>
+    api.post('/ai/autofix', data),
 };
 
 // ==================== QUERIES ====================
 export const queriesAPI = {
   execute: (sql: string, projectId?: string) =>
     api.post('/queries/execute', { sql, projectId }),
-  history: (params?: { search?: string; projectId?: string; limit?: number }) =>
+  history: (params?: { search?: string; projectId?: string; status?: string; limit?: number }) =>
     api.get('/queries/history', { params }),
   delete: (id: string) => api.delete(`/queries/${id}`),
+  clearHistory: (projectId?: string) =>
+    api.delete('/queries/history/clear', { params: { projectId } }),
 };
 
 // ==================== RELATIONSHIPS ====================

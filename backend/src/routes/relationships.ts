@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db/database';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { verifyProjectOwnership, verifyRelationshipOwnership } from '../middleware/ownership';
 
 const router = Router();
 router.use(authMiddleware);
@@ -10,6 +11,14 @@ router.use(authMiddleware);
 router.post('/', (req: AuthRequest, res: Response) => {
   try {
     const { project_id, source_table_id, source_column_id, target_table_id, target_column_id, rel_type, on_delete, on_update } = req.body;
+    if (!project_id) {
+      return res.status(400).json({ error: 'project_id is required' });
+    }
+
+    if (!verifyProjectOwnership(project_id, req.userId!)) {
+      return res.status(403).json({ error: 'Access denied: You do not have permission to modify this project' });
+    }
+
     const id = uuidv4();
     db.prepare(`
       INSERT INTO relationships (id, project_id, source_table_id, source_column_id, target_table_id, target_column_id, rel_type, on_delete, on_update)
@@ -26,6 +35,10 @@ router.post('/', (req: AuthRequest, res: Response) => {
 // DELETE relationship
 router.delete('/:id', (req: AuthRequest, res: Response) => {
   try {
+    if (!verifyRelationshipOwnership(req.params.id, req.userId!)) {
+      return res.status(403).json({ error: 'Access denied: You do not have permission to delete this relationship' });
+    }
+
     db.prepare('DELETE FROM relationships WHERE id = ?').run(req.params.id);
     res.json({ success: true });
   } catch (error) {
