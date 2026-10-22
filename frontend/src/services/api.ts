@@ -79,6 +79,8 @@ export const aiAPI = {
     api.post('/ai/analyze-schema', { projectId }),
   suggestIndexes: (projectId: string) =>
     api.post('/ai/suggest-indexes', { projectId }),
+  applyAutofix: (data: { projectId: string; issue: any }) =>
+    api.post('/ai/autofix', data),
 };
 
 // ==================== QUERIES ====================
