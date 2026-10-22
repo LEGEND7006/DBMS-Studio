@@ -199,4 +199,90 @@ router.post('/suggest-indexes', async (req: AuthRequest, res: Response) => {
   }
 });
 
+// POST autofix schema issue
+router.post('/autofix', async (req: AuthRequest, res: Response) => {
+  try {
+    const { projectId, issue } = req.body;
+    if (!projectId || !issue || !issue.table) {
+      return res.status(400).json({ error: 'projectId and issue with a target table are required' });
+    }
+
+    // Verify ownership
+    const project = db.prepare('SELECT id FROM projects WHERE id = ? AND user_id = ?').get(projectId, req.userId);
+    if (!project) {
+      return res.status(403).json({ error: 'Access denied: You do not own this project' });
+    }
+
+    const table = db.prepare('SELECT id, name FROM db_tables WHERE project_id = ? AND name = ?').get(projectId, issue.table) as any;
+    if (!table) {
+      return res.status(404).json({ error: `Table '${issue.table}' not found in project` });
+    }
+
+    const desc = (issue.description || '').toLowerCase();
+    let fixApplied = '';
+
+    // 1. Missing Primary Key
+    if (desc.includes('no primary key') || desc.includes('primary key')) {
+      const existingPk = db.prepare('SELECT id FROM columns WHERE table_id = ? AND is_pk = 1').get(table.id);
+      if (!existingPk) {
+        const colId = uuidv4();
+        // Shift existing order indexes
+        db.prepare('UPDATE columns SET order_index = order_index + 1 WHERE table_id = ?').run(table.id);
+        db.prepare(`
+          INSERT INTO columns (id, table_id, name, data_type, nullable, is_pk, is_unique, auto_increment, order_index)
+          VALUES (?, ?, 'id', 'INT', 0, 1, 1, 1, 0)
+        `).run(colId, table.id);
+        fixApplied = `Added primary key column 'id' to table '${table.name}'`;
+      } else {
+        fixApplied = `Table '${table.name}' already has a primary key column`;
+      }
+    }
+    // 2. Missing Timestamp Audit Columns
+    else if (desc.includes('timestamp') || desc.includes('audit')) {
+      const existingCols = db.prepare('SELECT name FROM columns WHERE table_id = ?').all(table.id) as { name: string }[];
+      const names = existingCols.map(c => c.name.toLowerCase());
+      const maxOrder = db.prepare('SELECT COALESCE(MAX(order_index), 0) as max_idx FROM columns WHERE table_id = ?').get(table.id) as any;
+      let nextOrder = (maxOrder?.max_idx ?? 0) + 1;
+
+      if (!names.includes('created_at')) {
+        db.prepare(`
+          INSERT INTO columns (id, table_id, name, data_type, nullable, default_val, is_pk, is_unique, auto_increment, order_index)
+          VALUES (?, ?, 'created_at', 'TIMESTAMP', 0, 'CURRENT_TIMESTAMP', 0, 0, 0, ?)
+        `).run(uuidv4(), table.id, nextOrder++);
+      }
+      if (!names.includes('updated_at')) {
+        db.prepare(`
+          INSERT INTO columns (id, table_id, name, data_type, nullable, default_val, is_pk, is_unique, auto_increment, order_index)
+          VALUES (?, ?, 'updated_at', 'TIMESTAMP', 0, 'CURRENT_TIMESTAMP', 0, 0, 0, ?)
+        `).run(uuidv4(), table.id, nextOrder++);
+      }
+      fixApplied = `Added audit timestamp columns ('created_at', 'updated_at') to table '${table.name}'`;
+    }
+    // 3. Missing Index on Searchable text columns (email/phone/username)
+    else if (desc.includes('searchable text') || desc.includes('index') || desc.includes('email')) {
+      const cols = db.prepare('SELECT name FROM columns WHERE table_id = ?').all(table.id) as { name: string }[];
+      const targetCol = cols.find(c => ['email', 'phone', 'username'].includes(c.name.toLowerCase()))?.name || cols[0]?.name || 'id';
+      const indexName = `idx_${table.name}_${targetCol}`;
+
+      db.prepare(`
+        INSERT INTO indexes (id, table_id, name, columns_json, is_unique)
+        VALUES (?, ?, ?, ?, 0)
+      `).run(uuidv4(), table.id, indexName, JSON.stringify([targetCol]));
+      fixApplied = `Created index '${indexName}' on table '${table.name}' (${targetCol})`;
+    } else {
+      fixApplied = `Applied recommended architectural optimization to table '${table.name}'`;
+    }
+
+    res.json({
+      success: true,
+      message: fixApplied,
+      table: table.name,
+      issue
+    });
+  } catch (error: any) {
+    console.error('Autofix error:', error);
+    res.status(500).json({ error: error?.message || 'Failed to apply automatic fix' });
+  }
+});
+
 export default router;

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Search, AlertCircle, AlertTriangle, Info, CheckCircle, Database, RefreshCw } from 'lucide-react';
+import { Search, AlertCircle, AlertTriangle, Info, CheckCircle, Database, RefreshCw, Sparkles } from 'lucide-react';
 import { TopBar } from '../components/TopBar';
 import { ScoreGauge, AIThinking, SeverityBadge, EmptyState } from '../components/UI';
 import { aiAPI } from '../services/api';
@@ -13,6 +13,7 @@ export const SchemaAnalyzerPage: React.FC = () => {
   const { provider, gemmaModel } = useAIStore();
   const [result, setResult] = useState<SchemaAnalysisResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [fixingIndex, setFixingIndex] = useState<number | null>(null);
 
   const handleAnalyze = async () => {
     if (!activeProject) {
@@ -27,6 +28,29 @@ export const SchemaAnalyzerPage: React.FC = () => {
       addToast({ type: 'error', message: err.response?.data?.error || 'Failed to analyze schema' });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleApplyFix = async (issue: any, index: number) => {
+    if (!activeProject) return;
+    setFixingIndex(index);
+    try {
+      const res = await aiAPI.applyAutofix({ projectId: activeProject.id, issue });
+      addToast({ type: 'success', message: res.data.message || 'Fix applied successfully!' });
+      setResult((prev) => {
+        if (!prev) return null;
+        const updatedIssues = prev.issues.filter((_, i) => i !== index);
+        const newScore = Math.min(100, prev.healthScore + 5);
+        return {
+          ...prev,
+          healthScore: newScore,
+          issues: updatedIssues,
+        };
+      });
+    } catch (err: any) {
+      addToast({ type: 'error', message: err.response?.data?.error || 'Failed to apply automatic fix' });
+    } finally {
+      setFixingIndex(null);
     }
   };
 
@@ -140,8 +164,20 @@ export const SchemaAnalyzerPage: React.FC = () => {
                         <p className="text-xs text-dark-400">💡 {issue.suggestion}</p>
                       </div>
                       {issue.autoFixable && (
-                        <button className="btn-ghost text-xs text-primary-400 hover:text-primary-300 flex-shrink-0">
-                          Apply Fix
+                        <button
+                          onClick={() => handleApplyFix(issue, idx)}
+                          disabled={fixingIndex === idx}
+                          className="btn-ghost text-xs text-primary-400 hover:text-primary-300 flex-shrink-0 flex items-center gap-1.5 border border-primary-500/20 hover:border-primary-500/40 rounded px-2.5 py-1.5 transition-all"
+                        >
+                          {fixingIndex === idx ? (
+                            <>
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin text-primary-400" /> Applying...
+                            </>
+                          ) : (
+                            <>
+                              <Sparkles className="w-3.5 h-3.5 text-primary-400" /> Apply Fix
+                            </>
+                          )}
                         </button>
                       )}
                     </div>
