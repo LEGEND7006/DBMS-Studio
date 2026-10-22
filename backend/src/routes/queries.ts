@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db/database';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { verifyProjectOwnership } from '../middleware/ownership';
 
 const router = Router();
 router.use(authMiddleware);
@@ -11,6 +12,10 @@ router.post('/execute', (req: AuthRequest, res: Response) => {
   try {
     const { sql, projectId } = req.body;
     if (!sql) return res.status(400).json({ error: 'SQL query is required' });
+
+    if (projectId && !verifyProjectOwnership(projectId, req.userId!)) {
+      return res.status(403).json({ error: 'Access denied: You do not have permission to execute queries in this project' });
+    }
 
     // Security check — block destructive queries in demo
     const upperSql = sql.trim().toUpperCase();

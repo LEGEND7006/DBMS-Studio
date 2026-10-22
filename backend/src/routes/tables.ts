@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db/database';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { verifyTableOwnership } from '../middleware/ownership';
 
 const router = Router();
 router.use(authMiddleware);
@@ -9,6 +10,10 @@ router.use(authMiddleware);
 // PUT update table
 router.put('/:id', (req: AuthRequest, res: Response) => {
   try {
+    if (!verifyTableOwnership(req.params.id, req.userId!)) {
+      return res.status(403).json({ error: 'Access denied: You do not have permission to modify this table' });
+    }
+
     const { name, description, position_x, position_y } = req.body;
     db.prepare(`
       UPDATE db_tables SET 
@@ -32,6 +37,10 @@ router.put('/:id', (req: AuthRequest, res: Response) => {
 // DELETE table
 router.delete('/:id', (req: AuthRequest, res: Response) => {
   try {
+    if (!verifyTableOwnership(req.params.id, req.userId!)) {
+      return res.status(403).json({ error: 'Access denied: You do not have permission to delete this table' });
+    }
+
     db.prepare('DELETE FROM db_tables WHERE id = ?').run(req.params.id);
     res.json({ success: true });
   } catch (error) {
@@ -42,6 +51,10 @@ router.delete('/:id', (req: AuthRequest, res: Response) => {
 // POST add column to table
 router.post('/:id/columns', (req: AuthRequest, res: Response) => {
   try {
+    if (!verifyTableOwnership(req.params.id, req.userId!)) {
+      return res.status(403).json({ error: 'Access denied: You do not have permission to modify this table' });
+    }
+
     const { name, data_type, nullable, default_val, is_pk, is_unique, auto_increment } = req.body;
     if (!name) return res.status(400).json({ error: 'Column name is required' });
 
@@ -64,6 +77,10 @@ router.post('/:id/columns', (req: AuthRequest, res: Response) => {
 // PUT update column
 router.put('/:tableId/columns/:colId', (req: AuthRequest, res: Response) => {
   try {
+    if (!verifyTableOwnership(req.params.tableId, req.userId!)) {
+      return res.status(403).json({ error: 'Access denied: You do not have permission to modify this table' });
+    }
+
     const { name, data_type, nullable, default_val, is_pk, is_unique, auto_increment } = req.body;
     db.prepare(`
       UPDATE columns SET
@@ -87,6 +104,10 @@ router.put('/:tableId/columns/:colId', (req: AuthRequest, res: Response) => {
 // DELETE column
 router.delete('/:tableId/columns/:colId', (req: AuthRequest, res: Response) => {
   try {
+    if (!verifyTableOwnership(req.params.tableId, req.userId!)) {
+      return res.status(403).json({ error: 'Access denied: You do not have permission to modify this table' });
+    }
+
     db.prepare('DELETE FROM columns WHERE id = ? AND table_id = ?').run(req.params.colId, req.params.tableId);
     res.json({ success: true });
   } catch (error) {
@@ -97,6 +118,10 @@ router.delete('/:tableId/columns/:colId', (req: AuthRequest, res: Response) => {
 // PUT save full columns array for a table
 router.put('/:id/columns', (req: AuthRequest, res: Response) => {
   try {
+    if (!verifyTableOwnership(req.params.id, req.userId!)) {
+      return res.status(403).json({ error: 'Access denied: You do not have permission to modify this table' });
+    }
+
     const { columns } = req.body;
     if (!Array.isArray(columns)) return res.status(400).json({ error: 'columns must be an array' });
 
