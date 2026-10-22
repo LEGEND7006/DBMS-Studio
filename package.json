@@ -1,0 +1,10 @@
+{
+  "name": "intelligent-dbms-studio",
+  "version": "1.0.0",
+  "description": "AI-powered database management platform with Google Gemma 4",
+  "scripts": {
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "build": "npm --prefix backend run build && npm --prefix frontend run build"
+  }
+}
