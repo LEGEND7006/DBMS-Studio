@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 
-const DB_PATH = path.join(__dirname, '../../data/dbms_studio.db');
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, '../../data/dbms_studio.db');
 
 // Ensure data directory exists
 const dataDir = path.dirname(DB_PATH);

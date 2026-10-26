@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: dbms-studio-backend
+    runtime: node
+    plan: free
+    rootDir: backend
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: JWT_SECRET
+        generateValue: true
+      - key: AI_PROVIDER
+        value: demo
+      - key: FRONTEND_URL
+        sync: false

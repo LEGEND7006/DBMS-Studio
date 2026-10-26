@@ -267,6 +267,51 @@ In the app, visit **Settings** to test the connection, toggle Gemma 4 Thinking M
 
 ---
 
+## 🚀 Production Deployment (Vercel + Render)
+
+The project includes pre-configured deployment manifests:
+- `render.yaml`: Blueprint configuration for Render backend
+- `vercel.json` & `frontend/vercel.json`: SPA routing rewrites for Vercel
+
+---
+
+### Step 1: Deploy Backend to Render
+
+1. Log in to [Render Dashboard](https://dashboard.render.com/).
+2. Click **New +** > **Blueprint** (or **Web Service**):
+   - **Using Blueprint (Recommended)**: Connect `LEGEND7006/DBMS-Studio`. Render automatically detects `render.yaml` and sets all build/start commands.
+   - **Using Web Service**:
+     - **Name**: `dbms-studio-backend`
+     - **Root Directory**: `backend`
+     - **Environment**: `Node`
+     - **Build Command**: `npm install && npm run build`
+     - **Start Command**: `npm start`
+     - **Health Check Path**: `/api/health`
+3. Add Environment Variables in Render:
+   - `NODE_ENV` = `production`
+   - `JWT_SECRET` = `(generate a strong random secret)`
+   - `AI_PROVIDER` = `demo` *(or `googleai` / `openrouter`)*
+   - `GOOGLE_AI_KEY` = *(optional, your Google AI Studio API key)*
+   - `FRONTEND_URL` = *(optional, your Vercel URL; backend also auto-allows all `*.vercel.app` domains)*
+4. Click **Deploy**. Note your backend URL (e.g. `https://dbms-studio-backend.onrender.com`).
+
+---
+
+### Step 2: Deploy Frontend to Vercel
+
+1. Log in to [Vercel](https://vercel.com/) and click **Add New... > Project**.
+2. Import the `LEGEND7006/DBMS-Studio` repository.
+3. Configure the project:
+   - **Root Directory**: Click **Edit** and select `frontend` *(or leave default root)*
+   - **Framework Preset**: `Vite`
+   - **Build Command**: `npm run build`
+   - **Output Directory**: `dist`
+4. Add Environment Variable:
+   - **`VITE_API_URL`**: `https://<YOUR-RENDER-BACKEND>.onrender.com` *(e.g. `https://dbms-studio-backend.onrender.com`)*
+5. Click **Deploy**!
+
+---
+
 ## 📄 License
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.

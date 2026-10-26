@@ -16,16 +16,39 @@ export const app = express();
 
 // Security middleware
 app.use(helmet({ crossOriginEmbedderPolicy: false }));
+const getAllowedOrigins = (): (string | RegExp)[] => {
+  const envOrigins = [process.env.FRONTEND_URL, process.env.CORS_ORIGIN]
+    .filter(Boolean)
+    .flatMap((val) => (val as string).split(',').map((s) => s.trim()))
+    .filter(Boolean);
+
+  return [
+    /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/,
+    /^https:\/\/[a-zA-Z0-9_-]+(\.[a-zA-Z0-9_-]+)*\.vercel\.app$/,
+    ...envOrigins,
+  ];
+};
+
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (like mobile apps, curl, etc.)
+    // Allow requests with no origin (like mobile apps, curl, Render health checks, etc.)
     if (!origin) return callback(null, true);
-    if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+
+    const patterns = getAllowedOrigins();
+    const isAllowed = patterns.some((pattern) => {
+      if (pattern === '*') return true;
+      if (pattern instanceof RegExp) return pattern.test(origin);
+      return pattern === origin;
+    });
+
+    if (isAllowed) {
       return callback(null, true);
     }
-    return callback(new Error('Not allowed by CORS'));
+    return callback(new Error(`Not allowed by CORS: ${origin}`));
   },
-  credentials: true
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 
 if (process.env.NODE_ENV !== 'test') {
